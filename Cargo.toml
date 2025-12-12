@@ -11,7 +11,7 @@ azalea = {
 }
 tokio = {
     version = "1.20.0",
-    features = ["full", "fs"]
+    features = ["full"]
 }
 anyhow = "1.0"
 regex = "1.10.0"
@@ -25,4 +25,3 @@ reqwest = {
     features = ["json"]
 }
 toml = "0.8.0"
-tokio::fs = "1.20.0"
