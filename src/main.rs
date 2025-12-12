@@ -18,11 +18,21 @@ async fn main() {
         Account::offline(&config.bot.username)
     };
 
-    ClientBuilder::new()
-        .set_handler(handle)
-        .start(account, &config.bot.server_address)
-        .await
-        .unwrap();
+    let (client_builder, mut event_receiver) = ClientBuilder::new();
+    
+    let handle = client_builder.start(account, &config.bot.server_address);
+    
+    // 启动事件处理循环
+    tokio::spawn(async move {
+        let mut state = State::default();
+        while let Some(event) = event_receiver.recv().await {
+            if let Err(e) = handle_event(&mut state, event).await {
+                println!("Error handling event: {:?}", e);
+            }
+        }
+    });
+    
+    handle.await.unwrap();
 }
 
 #[derive(Deserialize, Debug)]
@@ -106,9 +116,10 @@ static COMMAND_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^%([a-zA-Z0-9_]+)\s*(.*)$").unwrap()
 });
 
-async fn handle(bot: Client, event: Event, mut state: State) -> Result<()> {
+async fn handle_event(state: &mut State, event: Event) -> Result<()> {
     match event {
         Event::Chat(m) => {
+            let bot = m.client();
             let (sender, content) = m.split_sender_and_content();
             if sender.is_none() {
                 return Ok(());
@@ -123,8 +134,8 @@ async fn handle(bot: Client, event: Event, mut state: State) -> Result<()> {
                     "开盒" => handle_open_box(&bot, sender_name, args, &state).await?,
                     "tpa" => handle_tpa(&bot, sender_name, args, &state).await?,
                     "设置传送点" => handle_set_home(&bot, sender_name, args, &state).await?,
-                    "op" => handle_op(&bot, sender_name, args, &mut state).await?,
-                    "deop" => handle_deop(&bot, sender_name, args, &mut state).await?,
+                    "op" => handle_op(&bot, sender_name, args, state).await?,
+                    "deop" => handle_deop(&bot, sender_name, args, state).await?,
                     "op查询" => handle_op_query(&bot, sender_name, &state).await?,
                     _ => bot.chat(format!("未知命令: {}", command)),
                 }
