@@ -5,7 +5,8 @@ edition = "2021"
 
 [dependencies]
 azalea = {
-    path = "../azalea/azalea",
+    git = "https://github.com/azalea-rs/azalea.git",
+    branch = "main",
     features = ["full"]
 }
 tokio = {
