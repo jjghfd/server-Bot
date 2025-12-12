@@ -1,0 +1,7 @@
+[bot]
+username = "yhx1"
+server_address = "mc.zenoxs.cn"
+is_offline = true
+
+[bluemap]
+api_url = "https://map.zenoxs.cn/api"
