@@ -15,4 +15,3 @@ toml = "0.8.0"
 [dependencies.azalea]
 git = "https://github.com/azalea-rs/azalea.git"
 branch = "main"
-features = ["full"]
