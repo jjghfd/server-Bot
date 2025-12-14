@@ -6,15 +6,31 @@ on:
   pull_request:
     branches: [ main ]
 
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: true
+  CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+
 jobs:
   build:
     strategy:
       matrix:
         os: [windows-latest, ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 360  # 6小时超时限制
     
     steps:
     - uses: actions/checkout@v4
+    
+    - name: Cache Cargo dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
     
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
@@ -26,7 +42,7 @@ jobs:
       uses: ilammy/msvc-dev-cmd@v1.13.0
       
     - name: Build
-      run: cargo build --release
+      run: cargo build --release --locked
       
     - name: Upload artifact
       uses: actions/upload-artifact@v4

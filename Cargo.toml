@@ -4,14 +4,16 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tokio = { version = "1.48.0", features = ["full"] }
+tokio = { version = "1.48.0", features = ["rt-multi-thread", "macros", "time"] }
 anyhow = "1.0"
 regex = "1.12.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 toml = "0.8.0"
 
 [dependencies.azalea]
 git = "https://github.com/azalea-rs/azalea.git"
 branch = "main"
+default-features = false
+features = ["client"]
