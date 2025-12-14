@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> AppExit {
     let config = load_config().unwrap();
 
     let account = if config.bot.is_offline {
@@ -18,45 +18,45 @@ async fn main() {
         Account::offline(&config.bot.username)
     };
 
-    let (client_builder, mut event_receiver) = ClientBuilder::new();
-    
-    let handle = client_builder.start(account, &config.bot.server_address);
-    
-    // 启动事件处理循环
-    tokio::spawn(async move {
-        let mut state = State::default();
-        while let Some(event) = event_receiver.recv().await {
-            if let Err(e) = handle_event(&mut state, event).await {
-                println!("Error handling event: {:?}", e);
-            }
-        }
-    });
-    
-    handle.await.unwrap();
+    // 解析服务器地址
+    let address_parts: Vec<&str> = config.bot.server_address.split(':').collect();
+    let host = address_parts[0];
+    let port = if address_parts.len() > 1 {
+        address_parts[1].parse().unwrap_or(25565)
+    } else {
+        25565
+    };
+
+    ClientBuilder::new()
+        .set_handler(handle)
+        .start(account, (host, port))
+        .await
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 struct Config {
     bot: BotConfig,
     bluemap: BluemapConfig,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 struct BotConfig {
     username: String,
     server_address: String,
     is_offline: bool,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 struct BluemapConfig {
     api_url: String,
 }
 
+use std::sync::{Arc, Mutex};
+
 #[derive(Clone, Component)]
 pub struct State {
     super_ops: Vec<String>,
-    ops: Vec<String>,
+    ops: Arc<Mutex<Vec<String>>>,
     http_client: HttpClient,
     config: Config,
 }
@@ -72,7 +72,7 @@ impl Default for State {
         
         Self {
             super_ops,
-            ops: Vec::new(),
+            ops: Arc::new(Mutex::new(Vec::new())),
             http_client: HttpClient::new(),
             config,
         }
@@ -87,21 +87,30 @@ impl State {
     
     // 检查是否为超管（包括超级超管）
     fn is_op(&self, player: &str) -> bool {
-        self.is_super_op(player) || self.ops.contains(&player.to_string())
+        let ops = self.ops.lock().unwrap();
+        self.is_super_op(player) || ops.contains(&player.to_string())
     }
     
     // 添加超管
-    fn add_op(&mut self, player: &str) {
-        if !self.is_op(player) {
-            self.ops.push(player.to_string());
+    fn add_op(&self, player: &str) {
+        let mut ops = self.ops.lock().unwrap();
+        if !self.is_super_op(player) && !ops.contains(&player.to_string()) {
+            ops.push(player.to_string());
         }
     }
     
     // 移除超管
-    fn remove_op(&mut self, player: &str) {
-        if let Some(index) = self.ops.iter().position(|p| p == player) {
-            self.ops.remove(index);
+    fn remove_op(&self, player: &str) {
+        let mut ops = self.ops.lock().unwrap();
+        if let Some(index) = ops.iter().position(|p| p == player) {
+            ops.remove(index);
         }
+    }
+    
+    // 获取ops列表
+    fn get_ops(&self) -> Vec<String> {
+        let ops = self.ops.lock().unwrap();
+        ops.clone()
     }
 }
 
@@ -112,14 +121,14 @@ fn load_config() -> Result<Config> {
     Ok(config)
 }
 
+// 允许中文等非空白字符作为指令名
 static COMMAND_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^%([a-zA-Z0-9_]+)\s*(.*)$").unwrap()
+    Regex::new(r"^%([^\s]+)\s*(.*)$").unwrap()
 });
 
-async fn handle_event(state: &mut State, event: Event) -> Result<()> {
+async fn handle(bot: Client, event: Event, state: State) -> Result<()> {
     match event {
         Event::Chat(m) => {
-            let bot = m.client();
             let (sender, content) = m.split_sender_and_content();
             if sender.is_none() {
                 return Ok(());
@@ -134,9 +143,28 @@ async fn handle_event(state: &mut State, event: Event) -> Result<()> {
                     "开盒" => handle_open_box(&bot, sender_name, args, &state).await?,
                     "tpa" => handle_tpa(&bot, sender_name, args, &state).await?,
                     "设置传送点" => handle_set_home(&bot, sender_name, args, &state).await?,
-                    "op" => handle_op(&bot, sender_name, args, state).await?,
-                    "deop" => handle_deop(&bot, sender_name, args, state).await?,
+                    "挖矿" => {
+                        if !state.is_op(sender_name) {
+                            bot.chat("&#f877f8[&#df8af0樱&#c79ee7花&#aeb1df雪&#95c5d7机&#7cd8cf器&#64ecc6人&#4bffbe] &#47fac5您&#44f5cc暂&#40f0d3无&#3decdb管&#39e7e2理&#36e2e9权&#32ddf0限");
+                            return Ok(());
+                        }
+                        bot.chat("/tpa here");
+                        bot.chat("&#f877f8[&#e487f1樱&#cf97ea花&#bba7e4雪&#a7b7dd机&#92c7d6器&#7ed7cf人&#6ae7c8] 收到指令，正在tpa you请接受");
+                    },
+                    "op" => handle_op(&bot, sender_name, args, state.clone()).await?,
+                    "deop" => handle_deop(&bot, sender_name, args, state.clone()).await?,
                     "op查询" => handle_op_query(&bot, sender_name, &state).await?,
+                    "指令" => {
+                        bot.chat("&#f877f8[&#e487f1樱&#cf97ea花&#bba7e4雪&#a7b7dd机&#92c7d6器&#7ed7cf人&#6ae7c8] 可用指令列表：");
+                        bot.chat("1. %开盒 [玩家名字] - 查询玩家位置 (管理员)");
+                        bot.chat("2. %tpa me - 让机器人tp到你这里 (管理员)");
+                        bot.chat("3. %tpa you - 让你tp到机器人那里 (管理员)");
+                        bot.chat("4. %挖矿 - 机器人开始挖矿 (管理员)");
+                        bot.chat("5. %设置传送点 [名字] - 传送并设置家 (管理员)");
+                        bot.chat("6. %op [玩家名字] - 添加管理员 (超级管理员)");
+                        bot.chat("7. %deop [玩家名字] - 移除管理员 (超级管理员)");
+                        bot.chat("8. %op查询 - 查询管理员列表 (管理员)");
+                    },
                     _ => bot.chat(format!("未知命令: {}", command)),
                 }
             }
@@ -148,6 +176,11 @@ async fn handle_event(state: &mut State, event: Event) -> Result<()> {
 }
 
 async fn handle_open_box(bot: &Client, sender: &str, args: &str, state: &State) -> Result<()> {
+    if !state.is_op(sender) {
+        bot.chat("&#f877f8[&#df8af0樱&#c79ee7花&#aeb1df雪&#95c5d7机&#7cd8cf器&#64ecc6人&#4bffbe] &#47fac5您&#44f5cc暂&#40f0d3无&#3decdb管&#39e7e2理&#36e2e9权&#32ddf0限");
+        return Ok(());
+    }
+
     if args.is_empty() {
         bot.chat("&#f877f8[&#e487f1樱&#cf97ea花&#bba7e4雪&#a7b7dd机&#92c7d6器&#7ed7cf人&#6ae7c8] 请输入玩家名字，格式: %开盒 [名字]");
         return Ok(());
@@ -168,27 +201,65 @@ async fn handle_open_box(bot: &Client, sender: &str, args: &str, state: &State) 
 
 async fn get_player_position(state: &State, player_name: &str) -> Result<(i32, i32, i32)> {
     let api_url = format!("{}/players", state.config.bluemap.api_url);
-    let response = state.http_client
-        .get(&api_url)
-        .send()
-        .await?;
     
-    let players: serde_json::Value = response.json().await?;
+    // 添加重试机制
+    let mut attempts = 0;
+    let max_attempts = 3;
     
-    if let Some(players_array) = players.as_array() {
-        for player in players_array {
-            if let Some(name) = player.get("name").and_then(|n| n.as_str()) {
-                if name == player_name {
-                    let x = player.get("position").and_then(|p| p.get("x").and_then(|x| x.as_f64())).unwrap_or(0.0) as i32;
-                    let y = player.get("position").and_then(|p| p.get("y").and_then(|y| y.as_f64())).unwrap_or(0.0) as i32;
-                    let z = player.get("position").and_then(|p| p.get("z").and_then(|z| z.as_f64())).unwrap_or(0.0) as i32;
-                    return Ok((x, y, z));
+    loop {
+        match state.http_client
+            .get(&api_url)
+            .send()
+            .await {
+                Ok(response) => {
+                    // 检查HTTP状态码
+                    if !response.status().is_success() {
+                        if attempts < max_attempts - 1 {
+                            attempts += 1;
+                            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                            continue;
+                        }
+                        return Err(anyhow::anyhow!("HTTP请求失败，状态码: {}", response.status()));
+                    }
+                    
+                    match response.json::<serde_json::Value>().await {
+                        Ok(players) => {
+                            if let Some(players_array) = players.as_array() {
+                                for player in players_array {
+                                    if let Some(name) = player.get("name").and_then(|n| n.as_str()) {
+                                        if name == player_name {
+                                            let x = player.get("position").and_then(|p| p.get("x").and_then(|x| x.as_f64())).unwrap_or(0.0) as i32;
+                                            let y = player.get("position").and_then(|p| p.get("y").and_then(|y| y.as_f64())).unwrap_or(0.0) as i32;
+                                            let z = player.get("position").and_then(|p| p.get("z").and_then(|z| z.as_f64())).unwrap_or(0.0) as i32;
+                                            return Ok((x, y, z));
+                                        }
+                                    }
+                                }
+                                return Err(anyhow::anyhow!("玩家未找到"));
+                            } else {
+                                return Err(anyhow::anyhow!("API响应格式不正确"));
+                            }
+                        },
+                        Err(e) => {
+                            if attempts < max_attempts - 1 {
+                                attempts += 1;
+                                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                                continue;
+                            }
+                            return Err(anyhow::anyhow!("解析JSON响应失败: {}", e));
+                        }
+                    }
+                },
+                Err(e) => {
+                    if attempts < max_attempts - 1 {
+                        attempts += 1;
+                        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                        continue;
+                    }
+                    return Err(anyhow::anyhow!("网络请求失败: {}", e));
                 }
             }
-        }
     }
-    
-    Err(anyhow::anyhow!("玩家未找到"))
 }
 
 async fn handle_tpa(bot: &Client, sender: &str, args: &str, state: &State) -> Result<()> {
@@ -239,7 +310,7 @@ async fn handle_set_home(bot: &Client, sender: &str, args: &str, state: &State) 
 }
 
 // 处理添加op命令
-async fn handle_op(bot: &Client, sender: &str, args: &str, state: &mut State) -> Result<()> {
+async fn handle_op(bot: &Client, sender: &str, args: &str, state: &State) -> Result<()> {
     if args.is_empty() {
         bot.chat("&#f877f8[&#e487f1樱&#cf97ea花&#bba7e4雪&#a7b7dd机&#92c7d6器&#7ed7cf人&#6ae7c8] 请输入要添加的玩家名字，格式: %op [玩家名字]");
         return Ok(());
@@ -265,7 +336,7 @@ async fn handle_op(bot: &Client, sender: &str, args: &str, state: &mut State) ->
 }
 
 // 处理移除op命令
-async fn handle_deop(bot: &Client, sender: &str, args: &str, state: &mut State) -> Result<()> {
+async fn handle_deop(bot: &Client, sender: &str, args: &str, state: &State) -> Result<()> {
     if args.is_empty() {
         bot.chat("&#f877f8[&#e487f1樱&#cf97ea花&#bba7e4雪&#a7b7dd机&#92c7d6器&#7ed7cf人&#6ae7c8] 请输入要移除的玩家名字，格式: %deop [玩家名字]");
         return Ok(());
@@ -284,7 +355,13 @@ async fn handle_deop(bot: &Client, sender: &str, args: &str, state: &mut State) 
         return Ok(());
     }
     
-    if !state.ops.contains(&player_name.to_string()) {
+    // 先检查玩家是否在ops列表中，避免死锁
+    let is_op = {
+        let ops = state.ops.lock().unwrap();
+        ops.contains(&player_name.to_string())
+    };
+    
+    if !is_op {
         bot.chat(format!("&#f877f8[&#e487f1樱&#cf97ea花&#bba7e4雪&#a7b7dd机&#92c7d6器&#7ed7cf人&#6ae7c8] 玩家 {} 不是op", player_name));
         return Ok(());
     }
@@ -304,10 +381,11 @@ async fn handle_op_query(bot: &Client, sender: &str, state: &State) -> Result<()
     }
     
     let super_ops_list = state.super_ops.join(", ");
-    let ops_list = if state.ops.is_empty() {
+    let ops = state.get_ops();
+    let ops_list = if ops.is_empty() {
         "无".to_string()
     } else {
-        state.ops.join(", ")
+        ops.join(", ")
     };
     
     bot.chat(format!("&#f877f8[&#e487f1樱&#cf97ea花&#bba7e4雪&#a7b7dd机&#92c7d6器&#7ed7cf人&#6ae7c8] 超级超管：{}", super_ops_list));
@@ -315,3 +393,8 @@ async fn handle_op_query(bot: &Client, sender: &str, state: &State) -> Result<()
     
     Ok(())
 }
+
+
+
+
+
