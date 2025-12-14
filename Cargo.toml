@@ -13,7 +13,5 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 toml = "0.8.0"
 
 [dependencies.azalea]
-git = "https://github.com/azalea-rs/azalea.git"
-branch = "main"
-default-features = false
+version = "0.14.0"
 features = ["log", "serde", "packet-event", "online-mode"]
