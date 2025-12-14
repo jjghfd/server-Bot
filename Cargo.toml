@@ -16,4 +16,4 @@ toml = "0.8.0"
 git = "https://github.com/azalea-rs/azalea.git"
 branch = "main"
 default-features = false
-features = ["client"]
+features = ["log", "serde", "packet-event", "online-mode"]
